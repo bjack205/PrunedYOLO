@@ -108,3 +108,4 @@ ENV/
 .bcf
 .aux
 *.synctex.gz
+*.run.xml
