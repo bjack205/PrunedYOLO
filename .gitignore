@@ -101,3 +101,10 @@ ENV/
 .mypy_cache/
 
 .npz
+
+# latex
+.blg
+.bbl
+.bcf
+.aux
+*.synctex.gz
