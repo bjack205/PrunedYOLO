@@ -18,28 +18,56 @@ def loadFiles():
 
 
 def CalcMetrics(y, yhat):
-    num_classes = len(package_KITTI.KITTI_CLASSES)
-    iou_threshold = 0.5
-    plot = False
-    car_forgiveness = True
-    num_images = 100
+    """
+    Calculate Precision and Recall
+    :param y: True label data. numpy.lib.npyio.NpzFile containing the following variables:
+        'image_size': Size of resized images (to correct rectification)
+        'image_path': Path to the directory containing the images
+        'image_labels': (mx1) list of dictionaries with true image label data. Contains the following fields:
+            'objects': (Cx5) numpy array of C detected objects containing [class (integer), x1, y1, x2, y2]
+            'classes': (Cx1) list of strings of the detected classes (KITTI)
+            'file': (Cx1) list of strings of the file names, with image extension
+    :param yhat: Predicted label data. numpy.lib.npyio.NpzFile containing the following variables:
+            'image_labels': (mx1) list of dictionaries with true image label data. Contains the following fields:
+            'objects': (Cx5) numpy array of C detected objects containing [class (integer), x1, y1, x2, y2]
+            'classes': (Cx1) list of strings of the detected classes (KITTI)
+            'file': (Cx1) list of strings of the file names, with image extension
+            'scores': (Cx1) list of floats with the confidence scores for the detections
+    :return:
+    """
 
+    # Parameters
+    iou_threshold = 0.5      # Threshold for an accurate localization
+    plot = False             # Plot the images with bounding boxes
+    car_forgiveness = True   # Allows DontCare true labels to be accepted as cars
+    num_images = 100         # Number of images to analyze
+
+    # Important vars
+    num_classes = len(package_KITTI.KITTI_CLASSES)
+
+    # Get image size
     imsize_true = y['image_size']
 
-    path_predict = str(yhat['image_path'])
+    # Get image paths
+    path_predict = str(y['image_path'])
     path_true = y['image_path']
 
+    # Instatiate the plotter object
     plotter = BoxPlotter(path_predict, imsize_true)
 
+    # Extract image labels
     y = y['image_labels']
     yhat = yhat['image_labels']
 
+    # Get number of images in each set
     m_predict = len(yhat)
     m_true = len(y)
 
+    # Get file names for each set
     names_true = np.array([image['file'] for image in y])
     names_predict = np.array([image['file'] for image in yhat])
 
+    # Make the two lists the same length and ordered identically
     if m_true >= m_predict:
         inds = np.isin(names_true, names_predict)
         names_true = names_true[inds]
@@ -50,25 +78,31 @@ def CalcMetrics(y, yhat):
         sort_predict = np.argsort(names_predict)
         y = y[sort_true]
         yhat = yhat[sort_predict]
+    # TODO: Add option when there are more predictions than true labels
 
+    # Set up variables
     m = np.minimum(len(y), num_images)
     TP = np.zeros(num_classes)  # True positive (corrected)
     FP = np.zeros(num_classes)  # False positive (detected but incorrect)
     FN = np.zeros(num_classes)  # False negative (not detected)
     CN = np.zeros(num_classes)  # Count of true labels
+
     # Loop over all of the images
     for i in range(m):
+        # Extract true label data
         objects = y[i]['objects']
         num_objects = objects.shape[0]
         c_true = objects[:, 0].astype(int)  # class (int, KITTI)
         bb_true = objects[:, 1:]
         matches = np.zeros(num_objects)
 
-        result = np.zeros(yhat[i]['objects'].shape[0])  # track if the box was FP or TP
+        result = np.zeros(yhat[i]['objects'].shape[0])  # track if the box was FP (0) or TP (1)
+
+        # Loop over each predicted detection
         for j, label in enumerate(yhat[i]['objects']):
-            chat_coco = label[0:1].astype(int)   # predicted class (int, COCO)
-            chat = COCO2KITTI(chat_coco)
-            bbhat = label[1:]  # predicted bounding box
+            chat_coco = label[0:1].astype(int)  # predicted class (int, COCO)
+            chat = COCO2KITTI(chat_coco)        # convert to KITT classes TODO: change detection to detect KITTI classes
+            bbhat = label[1:]                   # predicted bounding box
 
             # Match the bounding box with the bounding box with the greatest IOU
             ious = [iou(bbhat, bb)for bb in bb_true]
@@ -79,7 +113,7 @@ def CalcMetrics(y, yhat):
             if c_true[match_ind] == chat and ious[match_ind] > iou_threshold:
                 TP[chat] += 1
                 result[j] = 1
-            elif (car_forgiveness
+            elif (car_forgiveness  # allows true "DontCare" labels to accept "Car" as true
                     and c_true[match_ind] == KITTI_CLASSES["DontCare"]
                     and chat == KITTI_CLASSES["Car"]):
                 TP[chat] += 1
@@ -87,6 +121,7 @@ def CalcMetrics(y, yhat):
             else:
                 FP[chat] += 1
                 result[j] = 0
+
         # Add result to image for plotting purposes
         yhat[i]['result'] = result
 
@@ -102,10 +137,11 @@ def CalcMetrics(y, yhat):
         if np.any(matches > 1):
             print("Some boxes were detected more than once")
 
+        # Plot
         if plot:
             plotter.comparison(y[i], yhat[i])
 
-
+    # Calculate precision and recall
     eps = 1e-9
     mAP = TP / (TP + FP + eps)
     recall = TP / (TP + FN + eps)
@@ -124,14 +160,22 @@ def CalcMetrics(y, yhat):
     print(T)
 
 
-
 class BoxPlotter:
+    """
+    Object to plot bounding boxes for predicted and true labels
+    """
     def __init__(self, image_folder, image_size):
+        """
+        :param image_folder: folder containing the images
+        :param image_size: size of the resized images
+        """
+        # Set label font
         self.font = ImageFont.truetype(
             font='font/FiraMono-Medium.otf',
             size=np.floor(3e-2 * image_size[1] + 0.5).astype('int32'))
         self.image_size = image_size
 
+        # Set bounding box colors
         self.color_pred = [ImageColor.getrgb('red'),  # False Positive
                       ImageColor.getrgb('green')]  # True Positive
         self.color_true = [ImageColor.getrgb('orange'),  # False Negative
@@ -139,37 +183,80 @@ class BoxPlotter:
         self.image_folder = image_folder
 
     def comparison(self, y, yhat):
+        """
+        Plots both predicted and true bounding boxes for comparison
+        :param y: dictionary of a true label data. One entry of the "y" input to the CalcMetrics function
+        :param yhat: dictionary of predicted label data
+        :return: Nothing. Displays a plot to the screen
+        """
+        # Open image and set up drawing variables
         image_path = os.path.join(self.image_folder, yhat['file'])
         image = Image.open(image_path)
         image = image.resize(self.image_size, Image.BICUBIC)
         draw = ImageDraw.Draw(image)
+
+        # Plot the boxes
         self.truth_boxes(draw, y)
         self.prediction_boxes(draw, yhat)
         image.show()
+
+        # Cleanup
         del draw
 
     def prediction_boxes(self, draw, yhat):
+        """
+        Plot bounding boxes for predicted labels. Box label includes class name and confidence
+        :param draw: PIL.ImageDraw.draw object
+        :param yhat: dictionary of predicted detection data
+        :return: Nothing
+        """
+        # Loop over each object detected in the image
         num_detections = yhat['objects'].shape[0]
         for j in range(num_detections):
+            # Extract out import info from dictionary
             classname = yhat['classes'][j]
             score = yhat['scores'][j]
             result = int(yhat['result'][j])
             box = yhat['objects'][j, 1:]
+
+            # Set label and color
             label = '{} {:.2f}'.format(classname, score)
             color = self.color_pred[result]
+
+            # Plot the boxes
             self.plot_box(draw, box, label, color)
 
     def truth_boxes(self, draw, y):
+        """
+        Plot bounding boxes for true labels. Box label includes class name and (Truth)
+        :param draw: PIL.ImageDraw.draw object
+        :param y: dictionary of true detection label data
+        :return: Nothing
+        """
+        # Loop over each object detected in the image
         num_true = y['objects'].shape[0]
         for j in range(num_true):
+            # Extract important info from dictionary
             classname = y['classes'][j]
             result = y['result'][j]
             box = y['objects'][j, 1:]
+
+            # Set label and color
             label = '{} {}'.format(classname, "(Truth)")
             color = self.color_true[result]
+
+            # Plot the boxes
             self.plot_box(draw, box, label, color)
 
     def plot_box(self, draw, box, label, color):
+        """
+        Actual routine for plotting the bounding boxes and labels on a PIL images
+        :param draw: PIL.ImageDraw.draw object
+        :param box: numpy array [x1, y1, x2, y2]
+        :param label: string to include in the label
+        :param color: color of the bounding box and label
+        :return: Nothing
+        """
         label_size = draw.textsize(label, self.font)
 
         # Draw bounding box
@@ -187,6 +274,11 @@ class BoxPlotter:
 
 
 def COCO2KITTI(classes):
+    """
+    Converts from COCO class integers to KITTI class integers
+    :param classes:
+    :return:
+    """
     for c in classes:
         if c == 0:    # person       (COCO)
             c = 3      # pedestrian  (KITTI)
@@ -207,7 +299,6 @@ def iou(box1, box2):
     # Arguments:
     # box1 -- first box, list object with coordinates (x1, y1, x2, y2)
     # box2 -- second box, list object with coordinates (x1, y1, x2, y2)
-
 
     # Calculate the (y1, x1, y2, x2) coordinates of the intersection of box1 and box2. Calculate its Area.
     xi1 = np.maximum(box1[0], box2[0])
