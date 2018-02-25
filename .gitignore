@@ -109,3 +109,8 @@ ENV/
 .aux
 *.synctex.gz
 *.run.xml
+
+
+# Project-specific
+*.npz
+images/
