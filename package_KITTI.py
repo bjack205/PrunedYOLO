@@ -19,7 +19,7 @@ parser.add_argument('-n', '--number_of_images',
                     type=int)
 parser.add_argument('-o', '--output_path',
                     help="Output path for the .npz file",
-                    default=".")
+                    default="./data")
 parser.add_argument('-s', '--shuffle',
                     help="Shuffle the entire training set",
                     action='store_true')
@@ -53,14 +53,14 @@ def count_files(dir):
 
 
 class KittiData:
-    def __init__(self):
+    def __init__(self, m=-1, output_path='~/Research/PrunedYOLO/data'):
         self.data_path = "/KITTI"
         self.camera = 2
         self.shuffle = True
         self.dev_split = 0.1
         self.save_images = False
         self.image_size = (1248, 384)  # Must be divisible by 32
-        self.output_path = '.'
+        self.output_path = os.path.expanduser(output_path)
         self.batch_size = 32
         self.ext = ".png"
         self.ny = 5
@@ -93,16 +93,22 @@ class KittiData:
         file_names = [os.path.splitext(name)[0] for name in image_names]
         file_names.sort()
 
+        # Reduce data size
+        if m > 0:
+            file_names = file_names[:m]
+            m_total = m
+
         # Split into train and dev
         if self.dev_split < 1:
             self.m_dev = int(np.round(m_total * self.dev_split))
         else:
             self.m_dev = self.dev_split
         self.m_train = int(m_total - self.m_dev)
+        self.m_total = m_total
         dev_names = file_names[:self.m_dev]
         train_names = file_names[self.m_dev:self.m_dev + self.m_train]
         self.partition = {'train': train_names, 'dev': dev_names}
-        self.IDs = file_names
+        self.IDs_list = file_names
 
         # Both dictionaries containing fields 'images' and 'labels'
         self.raw_data = {}
@@ -114,13 +120,6 @@ class KittiData:
         # Detector masks
         self.detector_masks = []
         self.matching_true_boxes = []
-
-    def compute_grid_size(self):
-        return self.image_size[0] // 32, self.image_size[1] // 32
-
-    def __print(self, string):
-        if self.print_info:
-            print(string)
 
     def convert_to_h5(self):
         h5path = self.h5file_path
@@ -141,14 +140,86 @@ class KittiData:
             self.__write_to_h5(file, self.partition["dev"], "dev")
             file.close()
 
+    def check_h5(self):
+        """
+        Checks if a valid h5 data file containing the processed data exists
+        :return:
+        """
+        return os.path.exists(self.h5file_path)
+
+    def load_data(self, yad2k=False):
+        """
+        Highest level data interaction function. Will detect if data has already been loaded.
+        If data has been saved to a .npz file it will load it; otherwise it will parse the raw data files
+        :return:
+        """
+        if not self.data_loaded:
+            if os.path.exists(self.saved_data_path):
+                self.load_files(yad2k)
+            else:
+                self.read_files(yad2k)
+        else:
+            self.__print("Data already loaded")
+
+    def load_files(self, yad2k=False):
+        """
+        Loads saved npz files with the raw data
+        :return: Nothing
+        """
+        self.__print("Loading data...")
+        data_path = self.saved_data_path
+        data = np.load(data_path)
+        self.raw_data['images'] = data['images']
+        self.raw_data['labels'] = data['image_labels']
+        self.data['images'], self.data['labels'] = self.__strip_data(data['images'], data['image_labels'], yad2k=yad2k)
+        del data
+        num_images = self.data['images'].shape[0]
+        num_labels = self.data['labels'].shape[0]
+        if not num_labels == self.m_total:
+            if self.save_images and not num_images == self.m_total:
+                self.__print("Number of loaded images (%d) does not match expected (%d)" % (num_images, self.m_total))
+            self.__print("Number of loaded labels (%d) does not match expected (%d)" % (num_labels, self.m_total))
+        self.__print("Loaded %d images and %d labels" % (num_images, num_labels))
+        self.data_loaded = True
+
+    def read_files(self, yad2k=False):
+        self.__print("Reading files...")
+        image_data, image_labels = self.__read_files_raw(self.IDs_list)
+        self.raw_data['labels'] = image_labels
+        self.raw_data['images'] = image_data
+        self.data['images'], self.data['labels'] = self.__strip_data(image_data, image_labels, yad2k=yad2k)
+        self.data_loaded = True
+
+    def save_yad2k_data(self, name):
+        if self.save_images:
+            self.load_data()
+            images, boxes = self.__strip_data(self.raw_data['images'], self.raw_data['labels'], yad2k=True)
+            save_path = os.path.join(self.output_path, name)
+            np.savez(save_path, boxes=boxes, images=images)
+            self.__print("Saved yad2k data to " + save_path + ".npz")
+
+    def __strip_data(self, X, Y, yad2k=False):
+        X_new = np.array(X)
+        for i, im in enumerate(Y):
+            ID = os.path.splitext(im['file'])[0]
+            self.IDs[ID] = i
+        Y_new = [im['objects'] for im in Y]
+        if not yad2k:
+            Y_new = self.convert_boxes(Y_new)
+            self.detector_masks, self.matching_true_boxes = self.get_detector_mask(Y_new, self.anchors)
+        else:
+            Y_new = np.array(Y_new)
+        return X_new, Y_new
+
     def __write_to_h5(self, file, IDs, name):
         group = file.create_group(name)
         n = len(IDs)
+        print("Number of images in" + name + ": " + str(n))
         label_size = self.data['labels'].shape
-        image_shape = (n, self.image_size[0], self.image_size[1], 3)
+        image_shape = (n, self.image_size[1], self.image_size[0], 3)
         label_shape = (n, label_size[1], label_size[2])
-        masks_shape = (n, self.grid_size[0], self.grid_size[1], len(self.anchors), 1)
-        boxes_shape = (n, self.grid_size[0], self.grid_size[1], len(self.anchors), label_size[2])
+        masks_shape = (n, self.grid_size[1], self.grid_size[0], len(self.anchors), 1)
+        boxes_shape = (n, self.grid_size[1], self.grid_size[0], len(self.anchors), label_size[2])
 
         ID_len = int(len(IDs[0]))
         group.create_dataset("images", image_shape, np.int8)
@@ -159,7 +230,7 @@ class KittiData:
 
         for i, id in enumerate(IDs):
             if (i + 1) % 100 == 0:
-                self.__print("Finished %d / %d" % (i+1, n))
+                self.__print("Finished %d / %d" % (i + 1, n))
             index = self.IDs[id]
             im = self.__read_image(id)
             group["images"][i, ...] = im
@@ -169,114 +240,26 @@ class KittiData:
             group["matching_true_boxes"][i, ...] = self.matching_true_boxes[index, :, :, :, :]
         # group["ids"] = IDs
 
-
     def __read_image(self, id):
         im = Image.open(os.path.join(self.image_path, id + self.ext))
-        im = np.array(im.resize(self.image_size, Image.BICUBIC)).transpose((1, 0, 2))
+        im = np.array(im.resize(self.image_size, Image.BICUBIC))
         return im
 
-    def load_data(self):
-        if not self.data_loaded:
-            if os.path.exists(self.saved_data_path):
-                self.load_files()
-            else:
-                self.read_files()
-        else:
-            self.__print("Data already loaded")
-
-
-    def load_files(self):
-        """
-        Loads saved npz files with the raw data
-        :return: Nothing
-        """
-        self.__print("Loading data...")
-        data_path = self.saved_data_path
-        data = np.load(data_path)
-        self.raw_data['images'] = data['images']
-        self.raw_data['labels'] = data['image_labels']
-        self.data['images'], self.data['labels'] = self.__strip_data(data['images'], data['image_labels'])
-        del data
-        self.data_loaded = True
-
-    def read_files(self):
-        self.__print("Reading files...")
-        image_data, image_labels = self.__read_files_raw(self.IDs)
-        self.raw_data['labels'] = image_labels
-        self.raw_data['images'] = image_data
-        self.data['images'], self.data['labels'] = self.__strip_data(image_data, image_labels)
-        self.data_loaded = True
-
-    def __strip_data(self, X, Y):
-        X_new = np.array(X)
-        for i, im in enumerate(Y):
-            ID = os.path.splitext(im['file'])[0]
-            self.IDs[ID] = i
-        Y_new = [im['objects'] for im in Y]
-        Y_new = self.convert_boxes(Y_new)
-        self.detector_masks, self.matching_true_boxes = self.get_detector_mask(Y_new, self.anchors)
-        return X_new, Y_new
-
-    def convert_boxes(self, boxes):
-        '''processes the data'''
-        self.__print("Converting boxes...")
-        # Box preprocessing.
-        orig_size = np.expand_dims(self.image_size, axis=0)
-        # Original boxes stored as 1D list of class, x_min, y_min, x_max, y_max.
-        boxes = [box.reshape((-1, 5)) for box in boxes]
-        # Get extents as y_min, x_min, y_max, x_max, class for comparision with
-        # model output.
-        boxes_extents = [box[:, [2, 1, 4, 3, 0]] for box in boxes]
-
-        # Get box parameters as x_center, y_center, box_width, box_height, class.
-        boxes_xy = [0.5 * (box[:, 3:5] + box[:, 1:3]) for box in boxes]
-        boxes_wh = [box[:, 3:5] - box[:, 1:3] for box in boxes]
-        boxes_xy = [boxxy / orig_size for boxxy in boxes_xy]
-        boxes_wh = [boxwh / orig_size for boxwh in boxes_wh]
-        boxes = [np.concatenate((boxes_xy[i], boxes_wh[i], box[:, 0:1]), axis=1) for i, box in enumerate(boxes)]
-
-        # find the max number of boxes
-        max_boxes = 0
-        for boxz in boxes:
-            if boxz.shape[0] > max_boxes:
-                max_boxes = boxz.shape[0]
-
-        # add zero pad for training
-        for i, boxz in enumerate(boxes):
-            if boxz.shape[0] < max_boxes:
-                zero_padding = np.zeros((max_boxes - boxz.shape[0], 5), dtype=np.float32)
-                boxes[i] = np.vstack((boxz, zero_padding))
-
-        return np.array(boxes)
-
-    def get_detector_mask(self, boxes, anchors):
-        '''
-        Precompute detectors_mask and matching_true_boxes for training.
-        Detectors mask is 1 for each spatial position in the final conv layer and
-        anchor that should be active for the given boxes and 0 otherwise.
-        Matching true boxes gives the regression targets for the ground truth box
-        that caused a detector to be active or 0 otherwise.
-        Copied from YAD2K retrain_yolo.py
-        '''
-        detector_save_path = os.path.join(self.output_path, "KITTI-masks.npz")
-        if os.path.exists(detector_save_path):
-            self.__print("Loading detector masks from file...")
-            data = np.load(detector_save_path)
-            detectors_mask = data['detectors_mask']
-            matching_true_boxes = data['matching_true_boxes']
-        else:
-            self.__print("Computing detector masks...")
-            detectors_mask = [0 for i in range(len(boxes))]
-            matching_true_boxes = [0 for i in range(len(boxes))]
-            for i, box in enumerate(boxes):
-                detectors_mask[i], matching_true_boxes[i] = preprocess_true_boxes(box, anchors, self.image_size)
-            detectors_mask = np.array(detectors_mask)
-            matching_true_boxes = np.array(matching_true_boxes)
-            np.savez(detector_save_path, detectors_mask=detectors_mask, matching_true_boxes=matching_true_boxes)
-
-        return np.array(detectors_mask, dtype=np.bool), np.array(matching_true_boxes)
-
     def __read_files_raw(self, file_names):
+        """
+        Parses through the raw KITTI data in self.data_path
+        Reads both the images and the labels
+        Only saves images when self.save_images is True
+        Saves output to self.saved_data_path
+        Saves "raw" data
+        :param file_names: list of KITTI IDs to read
+        :return:
+            images: ndarray of image data, shape (m, width, height, channel)
+            image_labels: (mx1) ndarray of objects. Each object is a dictionary:
+                file: ID.png
+                objects: ndarray of objects of size (num_objects x 5), columns [class, x1, y1, x2, y2]
+                classes: list of class names of size (num_objects,)
+        """
         # Initialize Lists
         image_labels = []
         images = []
@@ -299,7 +282,7 @@ class KittiData:
                 width = im.width
                 height = im.height
                 if self.save_images:
-                    images.append(im.resize(self.image_size))
+                    images.append(im.resize(self.image_size, Image.BICUBIC))
 
                 # Read label
                 object_labels = []
@@ -337,9 +320,10 @@ class KittiData:
                 print("Something went wrong")
             if (i + 1) % 10 == 0:
                 print("Finished %d images" % (i + 1))
+
         # Convert to numpy arrays
         image_labels = np.array(image_labels, dtype=np.object)
-        images = [np.array(im) / 255. for im in images]
+        images = [np.array(im) for im in images]
         images = np.array(images, dtype=np.uint8)
 
         # Output
@@ -347,7 +331,7 @@ class KittiData:
         print("Dataset contains {} labels".format(image_labels.shape[0]))
 
         # Save dataset
-        np.savez(self.data_path,
+        np.savez(self.saved_data_path,
                  filenames=file_names,
                  images=images,
                  image_labels=image_labels,
@@ -359,21 +343,93 @@ class KittiData:
                  location=location,
                  rotation=rotation_y,
                  image_size=self.image_size)
-        print('Data saved: ' + self.data_path)
+        print('Data saved: ' + self.saved_data_path)
 
         return images, image_labels
 
+    def get_detector_mask(self, boxes, anchors):
+        '''
+        Precompute detectors_mask and matching_true_boxes for training.
+        Detectors mask is 1 for each spatial position in the final conv layer and
+        anchor that should be active for the given boxes and 0 otherwise.
+        Matching true boxes gives the regression targets for the ground truth box
+        that caused a detector to be active or 0 otherwise.
+        Copied from YAD2K retrain_yolo.py
+        '''
+        detector_save_path = os.path.join(self.output_path, "KITTI-masks.npz")
+        if os.path.exists(detector_save_path) and False:
+            self.__print("Loading detector masks from file...")
+            data = np.load(detector_save_path)
+            detectors_mask = data['detectors_mask']
+            matching_true_boxes = data['matching_true_boxes']
+        else:
+            self.__print("Computing detector masks...")
+            detectors_mask = [0 for i in range(len(boxes))]
+            matching_true_boxes = [0 for i in range(len(boxes))]
+            for i, box in enumerate(boxes):
+                detectors_mask[i], matching_true_boxes[i] = \
+                    preprocess_true_boxes(box, anchors, [self.image_size[1], self.image_size[0]])
+            detectors_mask = np.array(detectors_mask)
+            matching_true_boxes = np.array(matching_true_boxes)
+            np.savez(detector_save_path, detectors_mask=detectors_mask, matching_true_boxes=matching_true_boxes)
+
+        return np.array(detectors_mask, dtype=np.bool), np.array(matching_true_boxes)
+
+    def convert_boxes(self, boxes):
+        '''processes the data'''
+        self.__print("Converting boxes...")
+        # Box preprocessing.
+        orig_size = np.expand_dims(self.image_size, axis=0)
+        # Original boxes stored as 1D list of class, x_min, y_min, x_max, y_max.
+        boxes = [box.reshape((-1, 5)) for box in boxes]
+        # Get extents as y_min, x_min, y_max, x_max, class for comparision with
+        # model output.
+        boxes_extents = [box[:, [2, 1, 4, 3, 0]] for box in boxes]
+
+        # Get box parameters as x_center, y_center, box_width, box_height, class.
+        boxes_xy = [0.5 * (box[:, 3:5] + box[:, 1:3]) for box in boxes]
+        boxes_wh = [box[:, 3:5] - box[:, 1:3] for box in boxes]
+        boxes_xy = [boxxy / orig_size for boxxy in boxes_xy]
+        boxes_wh = [boxwh / orig_size for boxwh in boxes_wh]
+        boxes = [np.concatenate((boxes_xy[i], boxes_wh[i], box[:, 0:1]), axis=1) for i, box in enumerate(boxes)]
+
+        # find the max number of boxes
+        max_boxes = 0
+        for boxz in boxes:
+            if boxz.shape[0] > max_boxes:
+                max_boxes = boxz.shape[0]
+
+        # add zero pad for training
+        for i, boxz in enumerate(boxes):
+            if boxz.shape[0] < max_boxes:
+                zero_padding = np.zeros((max_boxes - boxz.shape[0], 5), dtype=np.float32)
+                boxes[i] = np.vstack((boxz, zero_padding))
+
+        return np.array(boxes)
+
+    def compute_grid_size(self):
+        return self.image_size[0] // 32, self.image_size[1] // 32
+
+    def __print(self, string):
+        if self.print_info:
+            print(string)
+
     # GENERATOR FUNCTIONS
     def get_generators(self):
-        train_generator = self.__generate('train')
-        dev_generator = self.__generate('dev')
-        return train_generator, dev_generator
+        if os.path.exists(self.h5file_path):
+            self.__print("Created generators reading from " + self.h5file_path)
+            train_generator = self.__generate('train')
+            dev_generator = self.__generate('dev')
+            return train_generator, dev_generator
+        else:
+            self.__print("No h5 file found")
+            return [], []
 
     def __generate(self, name):
         'Generates batches of samples'
         # Infinite loop
         n = len(self.partition[name])
-        batches_list = list(range(int(np.ceil(float(n) / self.batch_size))))
+        batches_list = list(range(int(np.floor(float(n) / self.batch_size))))
         h5file = h5.File(self.h5file_path, mode='r')
         group = h5file[name]
         while 1:
@@ -430,16 +486,26 @@ class KittiData:
 if __name__ == '__main__':
     # KE = KITTI_Extractor(parser.parse_args())
     # KE.extract()
-    KD = KittiData()
-    # KD.read_files()
+    KD = KittiData(100, "./test")
+    # KD.save_images = True
+    # KD = KittiData()
+    KD.read_files()
+    # KD.load_data()
+    # KD.save_yad2k_data("KITTI_yad2k_small")
     # KD.load_files()
-    # KD.convert_to_h5()
+    KD.convert_to_h5()
+    # KD.batch_size = 2
 
     print('\nTesting Generators')
     train_gen, dev_gen = KD.get_generators()
-    batch = next(train_gen)
 
-    tic = time.time()
-    batch = next(train_gen)
-    toc = time.time()-tic
-    print(toc)
+    if train_gen:
+        batch = next(train_gen)
+
+        for out in batch[0]:
+            print(out.shape)
+
+        tic = time.time()
+        batch = next(train_gen)
+        toc = time.time()-tic
+        print(toc)
