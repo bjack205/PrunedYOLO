@@ -8,11 +8,11 @@ from keras.layers import Lambda
 from keras.layers.merge import concatenate
 from keras.models import Model
 
-from ..utils import compose
+sys.path.append('../utils')
+from utils import compose
 from .keras_darknet19 import (DarknetConv2D, DarknetConv2D_BN_Leaky,
                               darknet_body)
 
-sys.path.append('..')
 
 voc_anchors = np.array(
     [[1.08, 1.19], [3.42, 4.41], [6.63, 11.38], [9.42, 5.11], [16.62, 10.52]])
