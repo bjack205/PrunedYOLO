@@ -6,7 +6,7 @@ import numpy as np
 import argparse
 import time
 from random import shuffle
-from YAD2K.yad2k.models.keras_yolo import preprocess_true_boxes
+from yad2k.models.keras_yolo import preprocess_true_boxes
 
 parser = argparse.ArgumentParser(
     description="Package KITTI dataset as npz.")
@@ -486,14 +486,14 @@ class KittiData:
 if __name__ == '__main__':
     # KE = KITTI_Extractor(parser.parse_args())
     # KE.extract()
-    KD = KittiData(100, "./test")
+    # KD = KittiData(100, "./test")
     # KD.save_images = True
-    # KD = KittiData()
-    KD.read_files()
+    KD = KittiData()
+    # KD.read_files()
     # KD.load_data()
     # KD.save_yad2k_data("KITTI_yad2k_small")
     # KD.load_files()
-    KD.convert_to_h5()
+    # KD.convert_to_h5()
     # KD.batch_size = 2
 
     print('\nTesting Generators')
