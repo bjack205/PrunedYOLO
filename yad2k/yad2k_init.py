@@ -22,7 +22,7 @@ from keras.models import Model
 from keras.regularizers import l2
 from keras.utils.vis_utils import plot_model as plot
 
-from models.keras_yolo import (space_to_depth_x2,
+from yad2k.models.keras_yolo import (space_to_depth_x2,
                                      space_to_depth_x2_output_shape)
 
 parser = argparse.ArgumentParser(
