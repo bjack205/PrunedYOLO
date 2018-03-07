@@ -10,7 +10,7 @@ from keras.models import Model
 from keras.regularizers import l2
 
 sys.path.append('../utils')
-from utils import compose
+from yad2k.utils.utils import compose
 
 # Partial wrapper for Convolution2D with static default argument.
 _DarknetConv2D = partial(Conv2D, padding='same')

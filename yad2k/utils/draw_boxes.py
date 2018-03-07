@@ -42,7 +42,7 @@ def draw_boxes(image, boxes, box_classes, class_names, scores=None):
     Returns:
         A copy of `image` modified with given bounding boxes.
     """
-    image = Image.fromarray(np.floor(image * 255 + 0.5).astype('uint8'))
+    image = Image.fromarray(image)
 
     font = ImageFont.truetype(
         font='font/FiraMono-Medium.otf',
