@@ -1,5 +1,6 @@
 import numpy as np
 import package_KITTI
+import matplotlib.pyplot as plt
 import os
 from PIL import Image, ImageDraw, ImageColor, ImageFont
 from prettytable import PrettyTable
@@ -10,10 +11,10 @@ KITTI_CLASSES_LIST = ['Car', 'Van', 'Truck', 'Pedestrian', 'Person_sitting',
 KITTI_CLASSES = package_KITTI.KITTI_CLASSES
 
 def loadFiles():
-    true_label_file = "KITTI-dev.npz"
-    predicted_label_file = "./images/out/predicted_labels.npz"
-    y = np.load(true_label_file)
-    yhat = np.load(predicted_label_file)
+    predictions_file = "Predictions.npz"
+    data = np.load(predictions_file)
+    y = data['y'].item()
+    yhat = data['yhat'].item()
     CalcMetrics(y, yhat)
 
 
@@ -35,53 +36,31 @@ def CalcMetrics(y, yhat):
             'scores': (Cx1) list of floats with the confidence scores for the detections
     :return:
     """
+    data = package_KITTI.KittiData(m=1000, output_path="data/medium")
 
     # Parameters
     iou_threshold = 0.5      # Threshold for an accurate localization
-    plot = False             # Plot the images with bounding boxes
+    plot = True              # Plot the images with bounding boxes
     car_forgiveness = True   # Allows DontCare true labels to be accepted as cars
-    num_images = 100         # Number of images to analyze
+    num_images = 900         # Number of images to analyze
 
     # Important vars
-    num_classes = len(package_KITTI.KITTI_CLASSES)
+    num_classes = len(data.classes)
 
     # Get image size
-    imsize_true = y['image_size']
-
-    # Get image paths
-    path_predict = str(y['image_path'])
-    path_true = y['image_path']
+    imsize_true = data.image_size
 
     # Instatiate the plotter object
-    plotter = BoxPlotter(path_predict, imsize_true)
-
-    # Extract image labels
-    y = y['image_labels']
-    yhat = yhat['image_labels']
-
-    # Get number of images in each set
-    m_predict = len(yhat)
-    m_true = len(y)
-
-    # Get file names for each set
-    names_true = np.array([image['file'] for image in y])
-    names_predict = np.array([image['file'] for image in yhat])
-
-    # Make the two lists the same length and ordered identically
-    if m_true >= m_predict:
-        inds = np.isin(names_true, names_predict)
-        names_true = names_true[inds]
-        if len(names_true) != m_predict:
-            raise Exception("Unique predictions exist")
-        m_true = len(names_true)
-        sort_true = np.argsort(names_true)
-        sort_predict = np.argsort(names_predict)
-        y = y[sort_true]
-        yhat = yhat[sort_predict]
-    # TODO: Add option when there are more predictions than true labels
+    plotter = BoxPlotter(data.image_size)
+    plotter.save_path = "output_images/"
 
     # Set up variables
-    m = np.minimum(len(y), num_images)
+    partition = 'dev'
+    if partition == 'dev':
+        m = data.m_dev
+    else:
+        m = data.m_train
+    m = np.minimum(m, num_images)
     TP = np.zeros(num_classes)  # True positive (corrected)
     FP = np.zeros(num_classes)  # False positive (detected but incorrect)
     FN = np.zeros(num_classes)  # False negative (not detected)
@@ -89,23 +68,34 @@ def CalcMetrics(y, yhat):
 
     # Loop over all of the images
     for i in range(m):
-        # Extract true label data
-        objects = y[i]['objects']
-        num_objects = objects.shape[0]
-        c_true = objects[:, 0].astype(int)  # class (int, KITTI)
-        bb_true = objects[:, 1:]
-        matches = np.zeros(num_objects)
+        ID = y['ID'][i]
+        image = data.read_image_from_disk(ID)
 
-        result = np.zeros(yhat[i]['objects'].shape[0])  # track if the box was FP (0) or TP (1)
+        # Extract true label data
+        bb_true = y['boxes'][i, ...]
+        objects = ~np.all(bb_true == 0, axis=-1)
+        bb_true = bb_true[objects, ...]
+        c_true = y['classes'][i, objects].astype(int)
+        num_objects = bb_true.shape[0]
+
+        # Extract predicted label data
+        boxes_pred = yhat['boxes'][i, ...]
+        objects = ~np.all(boxes_pred == 0, axis=-1)
+        boxes_pred = boxes_pred[objects, ...]
+        classes_pred = yhat['classes'][i, objects, ...].astype(np.int)
+        scores = yhat['scores'][i, objects, ...]
+
+        num_predictions = boxes_pred.shape[0]
+
+        matches = np.zeros(num_objects)
+        result = np.zeros(num_predictions)  # track if the box was FP (0) or TP (1)
 
         # Loop over each predicted detection
-        for j, label in enumerate(yhat[i]['objects']):
-            chat_coco = label[0:1].astype(int)  # predicted class (int, COCO)
-            chat = COCO2KITTI(chat_coco)        # convert to KITT classes TODO: change detection to detect KITTI classes
-            bbhat = label[1:]                   # predicted bounding box
+        for j, bbhat in enumerate(boxes_pred):
+            chat = int(classes_pred[j])
 
             # Match the bounding box with the bounding box with the greatest IOU
-            ious = [iou(bbhat, bb)for bb in bb_true]
+            ious = [iou(bbhat, bb) for bb in bb_true]
             match_ind = int(np.argmax(ious))  # gives the index of the true label that best matches the prediction
             matches[match_ind] += 1  # count how many times true label is matched
 
@@ -123,10 +113,10 @@ def CalcMetrics(y, yhat):
                 result[j] = 0
 
         # Add result to image for plotting purposes
-        yhat[i]['result'] = result
+        # yhat[i]['result'] = result
 
         # Count all true boxes that were never matched as false negatives
-        y[i]['result'] = matches > 0
+        # y[i]['result'] = matches > 0
         for j in (matches == 0).nonzero():
             FN[c_true[j]] += 1
 
@@ -134,12 +124,18 @@ def CalcMetrics(y, yhat):
         for c in c_true:
             CN[c] += 1
 
-        if np.any(matches > 1):
-            print("Some boxes were detected more than once")
+        # if np.any(matches > 1):
+        #     print("Some boxes were detected more than once")
 
         # Plot
         if plot:
-            plotter.comparison(y[i], yhat[i])
+            y_i = plotter.package_data(bb_true, c_true, ID)
+            yhat_i = plotter.package_data(boxes_pred, classes_pred, ID, scores, result)
+            # yhat_i = {'boxes': boxes_pred, 'classes': classes_pred, 'scores': scores, 'result': result}
+            plotter.comparison(y_i, yhat_i, image)
+
+        if (i+1) % 100 == 0:
+            print("Finished %d / %d Images" % (i+1, m))
 
     # Calculate precision and recall
     eps = 1e-9
@@ -164,7 +160,7 @@ class BoxPlotter:
     """
     Object to plot bounding boxes for predicted and true labels
     """
-    def __init__(self, image_folder, image_size):
+    def __init__(self, image_size, save_path=None):
         """
         :param image_folder: folder containing the images
         :param image_size: size of the resized images
@@ -180,9 +176,19 @@ class BoxPlotter:
                       ImageColor.getrgb('green')]  # True Positive
         self.color_true = [ImageColor.getrgb('orange'),  # False Negative
                       ImageColor.getrgb('blue')]  # Detected true box
-        self.image_folder = image_folder
+        self.save_path = save_path
 
-    def comparison(self, y, yhat):
+    def package_data(self, boxes, classes, ID=None, scores=None, results=None):
+        y = {"boxes": boxes, "classes": classes}
+        if not ID is None:
+            y["ID"] = ID
+        if not scores is None:
+            y["scores"] = scores
+        if not results is None:
+            y["results"] = results
+        return y
+
+    def comparison(self, y, yhat, image_data):
         """
         Plots both predicted and true bounding boxes for comparison
         :param y: dictionary of a true label data. One entry of the "y" input to the CalcMetrics function
@@ -190,15 +196,23 @@ class BoxPlotter:
         :return: Nothing. Displays a plot to the screen
         """
         # Open image and set up drawing variables
-        image_path = os.path.join(self.image_folder, yhat['file'])
-        image = Image.open(image_path)
-        image = image.resize(self.image_size, Image.BICUBIC)
+        image_data = image_data / np.max(image_data) * 255
+        image_data = image_data.astype(np.uint8)
+        ID = y['ID']
+        # plt.imshow(image_data)
+        # plt.show()
+
+
+        image = Image.fromarray(image_data)
         draw = ImageDraw.Draw(image)
 
         # Plot the boxes
         self.truth_boxes(draw, y)
         self.prediction_boxes(draw, yhat)
-        image.show()
+        # image.show()
+
+        if not self.save_path is None:
+            image.save(os.path.join(os.path.join(self.save_path, ID + ".png")))
 
         # Cleanup
         del draw
@@ -211,13 +225,13 @@ class BoxPlotter:
         :return: Nothing
         """
         # Loop over each object detected in the image
-        num_detections = yhat['objects'].shape[0]
+        num_detections = yhat['scores'].shape[0]
         for j in range(num_detections):
             # Extract out import info from dictionary
-            classname = yhat['classes'][j]
+            classname = KITTI_CLASSES_LIST[yhat['classes'][j]]
             score = yhat['scores'][j]
-            result = int(yhat['result'][j])
-            box = yhat['objects'][j, 1:]
+            result = 1  # int(yhat['result'][j])
+            box = yhat['boxes'][j, :]
 
             # Set label and color
             label = '{} {:.2f}'.format(classname, score)
@@ -234,12 +248,13 @@ class BoxPlotter:
         :return: Nothing
         """
         # Loop over each object detected in the image
-        num_true = y['objects'].shape[0]
+        num_true = y['classes'].shape[0]
         for j in range(num_true):
             # Extract important info from dictionary
-            classname = y['classes'][j]
-            result = y['result'][j]
-            box = y['objects'][j, 1:]
+            classname = KITTI_CLASSES_LIST[y['classes'][j]]
+            result = 1
+            box = y['boxes'][j, :]
+            # box = box[[1, 0, 3, 2]]
 
             # Set label and color
             label = '{} {}'.format(classname, "(Truth)")
@@ -306,13 +321,11 @@ def iou(box1, box2):
     xi2 = np.minimum(box1[2], box2[2])
     yi2 = np.minimum(box1[3], box2[3])
     inter_area = (yi2 - yi1) * (xi2 - xi1)
-    print(inter_area)
 
     # Calculate the Union area by using Formula: Union(A,B) = A + B - Inter(A,B)
     box1_area = (box1[2] - box1[0]) * (box1[3] - box1[1])
     box2_area = (box2[2] - box2[0]) * (box2[3] - box2[1])
     union_area = box1_area + box2_area - inter_area
-    print(union_area)
 
     # compute the IoU
     iou = inter_area / float(union_area)

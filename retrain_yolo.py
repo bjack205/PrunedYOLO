@@ -26,27 +26,27 @@ argparser.add_argument(
     '-d',
     '--data_path',
     help="path to numpy data file (.npz) containing np.object array 'boxes' and np.uint8 array 'images'",
-    default=os.path.join('..', 'DATA', 'underwater_data.npz'))
+    default=os.path.join('data', 'yad2k', 'KITTI_yad2k_tiny.npz'))
 
 argparser.add_argument(
     '-a',
     '--anchors_path',
     help='path to anchors file, defaults to yolo_anchors.txt',
-    default=os.path.join('model_data', 'yolo_anchors.txt'))
+    default=os.path.join('data', 'model_data', 'yolo_anchors.txt'))
 
 argparser.add_argument(
     '-c',
     '--classes_path',
     help='path to classes file, defaults to pascal_classes.txt',
-    default=os.path.join('..', 'DATA', 'underwater_classes.txt'))
+    default=os.path.join('kitti_classes.txt'))
 
 # Default anchor boxes
 YOLO_ANCHORS = np.array(
     ((0.57273, 0.677385), (1.87446, 2.06253), (3.33843, 5.47434),
      (7.88282, 3.52778), (9.77052, 9.16828)))
 
-IMAGE_SIZE = (640, 192)
-# IMAGE_SIZE = (416, 416)
+ORIGINAL_IMAGE_SIZE = (640, 192)
+IMAGE_SIZE = (416, 416)
 
 def _main(args):
     data_path = os.path.expanduser(args.data_path)
@@ -61,11 +61,14 @@ def _main(args):
     #  and an array of images 'images'
 
     boxes_original = data['boxes']
-    image_data, boxes = process_data(data['images'], data['boxes'])
+    image_data_original = data['images']
+    image_data, boxes = process_data(image_data_original, boxes_original)
 
+    print(anchors)
     anchors = YOLO_ANCHORS
     for i, anchor in enumerate(anchors):
-        anchors[i, :] = anchor / [416, 416] * IMAGE_SIZE * (1.5, 1)
+        anchors[i, :] = anchor  # * [416, 416] / IMAGE_SIZE * (1, 1.5)
+    print(anchors)
 
     detectors_mask, matching_true_boxes = get_detector_mask(boxes, anchors)
 
@@ -87,9 +90,10 @@ def _main(args):
         class_names,
         anchors,
         image_data,
+        image_data_original,
         boxes_original,
         image_set='train', # assumes training/validation split is 0.9
-        weights_name='trained_stage_1.h5',
+        weights_name='YOLO_fine_tuned.h5',
         save_all=False)
 
 
@@ -124,7 +128,7 @@ def process_data(images, boxes=None):
 
     if boxes is not None:
         # Box preprocessing.
-        # Original boxes stored as 1D list of class, x_min, y_min, x_max, y_max.
+        # Original boxes stored as 1D list of class, x_min, y_min, x_max, y_max. (BEJ: in pixels)
         boxes = [box.reshape((-1, 5)) for box in boxes]
         # Get extents as y_min, x_min, y_max, x_max, class for comparision with
         # model output.
@@ -201,10 +205,10 @@ def create_model(anchors, class_names, load_pretrained=True, freeze_body=True):
 
     if load_pretrained:
         # Save topless yolo:
-        topless_yolo_path = os.path.join('model_data', 'yolo_topless.h5')
+        topless_yolo_path = os.path.join('data/model_data', 'yolo_topless.h5')
         if not os.path.exists(topless_yolo_path):
             print("CREATING TOPLESS WEIGHTS FILE")
-            yolo_path = os.path.join('model_data', 'yolo.h5')
+            yolo_path = os.path.join('data/model_data', 'yolo.h5')
             model_body = load_model(yolo_path)
             model_body = Model(model_body.inputs, model_body.layers[-2].output)
             model_body.save_weights(topless_yolo_path)
@@ -264,7 +268,7 @@ def train(model, class_names, anchors, image_data, boxes, detectors_mask, matchi
               np.zeros(len(image_data)),
               validation_split=validation_split,
               batch_size=32,
-              epochs=30,
+              epochs=100,
               callbacks=[logging])
     model.save_weights('trained_stage_1.h5')
     model.save("YOLO_fine_tuned.h5")
@@ -299,13 +303,17 @@ def train(model, class_names, anchors, image_data, boxes, detectors_mask, matchi
 
     model.save_weights('trained_stage_3.h5')
 
-def draw(model_body, class_names, anchors, image_data, boxes, image_set='val',
+def draw(model_body, class_names, anchors, image_data, image_data_original, truth_boxes, image_set='val',
             weights_name='trained_stage_3_best.h5', out_path="output_images", save_all=True):
     '''
     Draw bounding boxes on image data
     '''
 
-    plotter = BoxPlotter(IMAGE_SIZE)
+    image_size_orig = tuple(reversed(image_data_original.shape[1:3]))  # width, height
+    image_data_size = tuple(reversed(image_data.shape[1:3]))  # width, height
+    print(image_size_orig)
+    print(image_data_size)
+    plotter = BoxPlotter(image_size_orig)
 
     if image_set == 'train':
         image_data = np.array([np.expand_dims(image, axis=0)
@@ -319,7 +327,6 @@ def draw(model_body, class_names, anchors, image_data, boxes, image_set='val',
     else:
         ValueError("draw argument image_set must be 'train', 'val', or 'all'")
     # model.load_weights(weights_name)
-    print(image_data.shape)
     model_body.load_weights(weights_name)
 
     # Create output variables for prediction.
@@ -338,19 +345,23 @@ def draw(model_body, class_names, anchors, image_data, boxes, image_set='val',
             [boxes, scores, classes],
             feed_dict={
                 model_body.input: image_data[i],
-                input_image_shape: [image_data.shape[2], image_data.shape[3]],
+                input_image_shape: [image_size_orig[1], image_size_orig[0]],  # height, width
                 K.learning_phase(): 0
             })
         print('Found {} boxes for image.'.format(len(out_boxes)))
-        print(out_boxes)
         # outboxes = [ymin, xmin, ymax, xmax]
         out_boxes2 = out_boxes[:, [1, 0, 3, 2]]
 
-        y = plotter.package_data(boxes[:, 1:], boxes[:, 0:1])
-        yhat = plotter.package_data(out_boxes2, out_classes, out_scores)
+        image = image_data_original[i]
+        image = image / np.max(image) * 255
+        image = image.astype(np.uint8)
+
+        y = plotter.package_data(truth_boxes[i][:, 1:], truth_boxes[i][:, 0].astype(np.int))
+        yhat = plotter.package_data(out_boxes2, out_classes.astype(np.int), out_scores)
+        plotter.comparison(y, yhat, image)
 
         # Plot image with predicted boxes.
-        image_with_boxes = draw_boxes(image_data[i][0], out_boxes, out_classes,
+        image_with_boxes = draw_boxes(image_data_original[i], out_boxes, out_classes,
                                     class_names, out_scores)
         # Save the image:
         if save_all or (len(out_boxes) > 0):
@@ -360,6 +371,8 @@ def draw(model_body, class_names, anchors, image_data, boxes, image_set='val',
         # To display (pauses the program):
         # plt.imshow(image_with_boxes, interpolation='nearest')
         # plt.show()
+        input("Enter for next image")
+
 
 
 
