@@ -114,3 +114,8 @@ ENV/
 # Project-specific
 *.npz
 images/
+data/
+logs/
+output_images/
+*.h5
+.idea/
