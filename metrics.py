@@ -10,12 +10,28 @@ KITTI_CLASSES_LIST = ['Car', 'Van', 'Truck', 'Pedestrian', 'Person_sitting',
 
 KITTI_CLASSES = package_KITTI.KITTI_CLASSES
 
+COCO_CLASSES = {'person', 'bicycle', 'car', 'train', 'truck'}
+
 def loadFiles():
     predictions_file = "Predictions.npz"
     data = np.load(predictions_file)
     y = data['y'].item()
     yhat = data['yhat'].item()
     CalcMetrics(y, yhat)
+
+
+def get_classes(classes_path):
+    '''loads the classes'''
+    with open(classes_path) as f:
+        class_names = f.readlines()
+    class_names = [c.strip() for c in class_names]
+    return class_names
+
+
+def filter_classes(class_ints, class_list, class_filt):
+    class_names = [class_list[int(c)] for c in class_ints]
+    filter = [name in class_filt for name in class_names]
+    return np.array(filter)
 
 
 def CalcMetrics(y, yhat):
@@ -36,12 +52,18 @@ def CalcMetrics(y, yhat):
             'scores': (Cx1) list of floats with the confidence scores for the detections
     :return:
     """
-    data = package_KITTI.KittiData(m=1000, output_path="data/medium")
+    data = package_KITTI.KittiData(m=1000, output_path="data/coco", image_data_size=(608, 608))
+    if data.to_coco:
+        classes = get_classes("data/model_data/coco_classes.txt")
+        classes_filt = COCO_CLASSES
+    else:
+        classes = get_classes("data/model_data/kitti_classes.txt")
+        classes_filt = set(classes)
 
     # Parameters
     iou_threshold = 0.5      # Threshold for an accurate localization
     plot = True              # Plot the images with bounding boxes
-    car_forgiveness = True   # Allows DontCare true labels to be accepted as cars
+    car_forgiveness = False  # Allows DontCare true labels to be accepted as cars
     num_images = 900         # Number of images to analyze
 
     # Important vars
@@ -51,7 +73,7 @@ def CalcMetrics(y, yhat):
     imsize_true = data.image_size
 
     # Instatiate the plotter object
-    plotter = BoxPlotter(data.image_size)
+    plotter = BoxPlotter(data.image_size, classes=classes)
     plotter.save_path = "output_images/"
 
     # Set up variables
@@ -73,14 +95,14 @@ def CalcMetrics(y, yhat):
 
         # Extract true label data
         bb_true = y['boxes'][i, ...]
-        objects = ~np.all(bb_true == 0, axis=-1)
+        objects = ~np.all(bb_true == 0, axis=-1) & filter_classes(y['classes'][i], classes, classes_filt)
         bb_true = bb_true[objects, ...]
         c_true = y['classes'][i, objects].astype(int)
         num_objects = bb_true.shape[0]
 
         # Extract predicted label data
         boxes_pred = yhat['boxes'][i, ...]
-        objects = ~np.all(boxes_pred == 0, axis=-1)
+        objects = ~np.all(boxes_pred == 0, axis=-1) & filter_classes(y['classes'][i], classes, classes_filt)
         boxes_pred = boxes_pred[objects, ...]
         classes_pred = yhat['classes'][i, objects, ...].astype(np.int)
         scores = yhat['scores'][i, objects, ...]
@@ -137,22 +159,29 @@ def CalcMetrics(y, yhat):
         if (i+1) % 100 == 0:
             print("Finished %d / %d Images" % (i+1, m))
 
+    # Convert to nparrays
+    TP = np.array(TP)
+    FP = np.array(FP)
+    FN = np.array(FN)
+    CN = np.array(CN)
+
     # Calculate precision and recall
     eps = 1e-9
     mAP = TP / (TP + FP + eps)
     recall = TP / (TP + FN + eps)
-    header = list(KITTI_CLASSES_LIST)
     total_detections = TP + FP
 
-    header.insert(0, "")
-    T = PrettyTable(header)
-    T.add_row(np.hstack(("TP", TP)))
-    T.add_row(np.hstack(("FP", FP)))
-    T.add_row(np.hstack(("FN", FN)))
-    T.add_row(np.hstack(("TD", total_detections)))
-    T.add_row(np.hstack(("TL", CN)))
-    T.add_row(np.hstack(("mAP", np.round(mAP, 2))))
-    T.add_row(np.hstack(("RCL", np.round(recall, 2))))
+    mask = [name in classes_filt for name in classes]
+    header = np.array(classes)[mask]
+    header = np.hstack(('0', header))
+    T = PrettyTable(list(header))
+    T.add_row(np.hstack(("TP", TP[mask])))
+    T.add_row(np.hstack(("FP", FP[mask])))
+    T.add_row(np.hstack(("FN", FN[mask])))
+    T.add_row(np.hstack(("TD", total_detections[mask])))
+    T.add_row(np.hstack(("TL", CN[mask])))
+    T.add_row(np.hstack(("mAP", np.round(mAP[mask], 2))))
+    T.add_row(np.hstack(("RCL", np.round(recall[mask], 2))))
     print(T)
 
 
@@ -160,7 +189,7 @@ class BoxPlotter:
     """
     Object to plot bounding boxes for predicted and true labels
     """
-    def __init__(self, image_size, save_path=None):
+    def __init__(self, image_size, classes, save_path=None):
         """
         :param image_folder: folder containing the images
         :param image_size: size of the resized images
@@ -177,6 +206,7 @@ class BoxPlotter:
         self.color_true = [ImageColor.getrgb('orange'),  # False Negative
                       ImageColor.getrgb('blue')]  # Detected true box
         self.save_path = save_path
+        self.classes = classes
 
     def package_data(self, boxes, classes, ID=None, scores=None, results=None):
         y = {"boxes": boxes, "classes": classes}
@@ -201,7 +231,6 @@ class BoxPlotter:
         ID = y['ID']
         # plt.imshow(image_data)
         # plt.show()
-
 
         image = Image.fromarray(image_data)
         draw = ImageDraw.Draw(image)
@@ -228,7 +257,7 @@ class BoxPlotter:
         num_detections = yhat['scores'].shape[0]
         for j in range(num_detections):
             # Extract out import info from dictionary
-            classname = KITTI_CLASSES_LIST[yhat['classes'][j]]
+            classname = self.classes[yhat['classes'][j]]
             score = yhat['scores'][j]
             result = 1  # int(yhat['result'][j])
             box = yhat['boxes'][j, :]
@@ -251,7 +280,7 @@ class BoxPlotter:
         num_true = y['classes'].shape[0]
         for j in range(num_true):
             # Extract important info from dictionary
-            classname = KITTI_CLASSES_LIST[y['classes'][j]]
+            classname = self.classes[y['classes'][j]]
             result = 1
             box = y['boxes'][j, :]
             # box = box[[1, 0, 3, 2]]
@@ -305,7 +334,7 @@ def COCO2KITTI(classes):
             c = 0      # car
         else:
             c = 7      # Misc
-    return c
+    return classes
 
 
 def iou(box1, box2):

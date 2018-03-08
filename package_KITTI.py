@@ -48,19 +48,33 @@ YOLO_ANCHORS = np.array(
     ((0.57273, 0.677385), (1.87446, 2.06253), (3.33843, 5.47434),
      (7.88282, 3.52778), (9.77052, 9.16828)))
 
+# KITTI          car  van truck ped sit  cylst tram  Misc   DontCare
+# COCO           car  car truck  person  bike  train  ---None---
+KITTI_TO_COCO = {0:2, 1:2, 2:7, 3:0, 4:0, 5:1, 6:6, 7:None, 8:None}
+
+
 def count_files(dir):
     return len([name for name in os.listdir(dir) if os.path.isfile(os.path.join(dir, name))])
 
 
+def get_classes_dict(classes_path):
+    '''loads the classes'''
+    with open(classes_path) as f:
+        class_names = f.readlines()
+    class_names = [c.strip() for c in class_names]
+    class_names = {c: i for i, c in enumerate(class_names)}
+    return class_names
+
+
 class KittiData:
-    def __init__(self, m=-1, output_path='~/Research/PrunedYOLO/data'):
+    def __init__(self, m=-1, output_path='~/Research/PrunedYOLO/data', image_data_size=(416, 416)):
         self.data_path = "/KITTI"
         self.camera = 2
         self.shuffle = True
         self.dev_split = 0.1
         self.save_images = False
         self.image_size = (640, 192)  # Must be divisible by 32
-        self.image_data_size = (416, 416)
+        self.image_data_size = image_data_size
         self.output_path = os.path.expanduser(output_path)
         self.batch_size = 32
         self.ext = ".png"
@@ -68,11 +82,14 @@ class KittiData:
         self.classes = KITTI_CLASSES
         self.anchors = YOLO_ANCHORS
         self.print_info = True
+        self.to_coco = True
 
         self.grid_size = self.compute_grid_size()
         self.data_loaded = False
         self.saved_data_path = os.path.join(self.output_path, "KITTI-train.npz")
         self.h5file_path = os.path.join(self.output_path, "KITTI.h5")
+        if self.to_coco:
+            self.classes = get_classes_dict("data/model_data/coco_classes.txt")
 
         # Get file paths
         training_path = os.path.join(self.data_path, 'training')
@@ -353,25 +370,30 @@ class KittiData:
                     # Create label [type, x1, y1, x2, y2]
                     class_name = object[KITTI_LABELS['type']]
                     otype = KITTI_CLASSES[class_name]
+                    if self.to_coco:
+                        otype = KITTI_TO_COCO[otype]
                     bbox = [float(data) for data in object[KITTI_LABELS['bbox']]]
                     bbox[0] /= width / self.image_size[0]  # Rescale bounding boxes by target image size
                     bbox[1] /= height / self.image_size[1]
                     bbox[2] /= width / self.image_size[0]
                     bbox[3] /= height / self.image_size[1]
                     bbox.insert(0, otype)
-                    object_labels.append(bbox)
-                    class_labels.append(class_name)
 
                     # Store other KITTI data
-                    truncated.append(float(object[KITTI_LABELS['truncated']]))
-                    occluded.append(int(object[KITTI_LABELS['occluded']]))
-                    alpha.append(float(object[KITTI_LABELS['alpha']]))
-                    dimensions.append([float(data) for data in object[KITTI_LABELS['dimensions']]])
-                    location.append([float(data) for data in object[KITTI_LABELS['location']]])
-                    rotation_y.append(float(object[KITTI_LABELS['rotation']]))
-                image_label = {'file': name + self.im_ext, 'objects': np.array(object_labels, dtype=np.int),
-                               'classes': class_labels}
-                image_labels.append(image_label)
+                    if not otype is None:
+                        object_labels.append(bbox)
+                        class_labels.append(class_name)
+
+                        truncated.append(float(object[KITTI_LABELS['truncated']]))
+                        occluded.append(int(object[KITTI_LABELS['occluded']]))
+                        alpha.append(float(object[KITTI_LABELS['alpha']]))
+                        dimensions.append([float(data) for data in object[KITTI_LABELS['dimensions']]])
+                        location.append([float(data) for data in object[KITTI_LABELS['location']]])
+                        rotation_y.append(float(object[KITTI_LABELS['rotation']]))
+                if len(class_labels) > 0:
+                    image_label = {'file': name + self.im_ext, 'objects': np.array(object_labels, dtype=np.int),
+                                   'classes': class_labels}
+                    image_labels.append(image_label)
             else:
                 print("Something went wrong")
             if (i + 1) % 10 == 0:
@@ -553,13 +575,13 @@ class KittiData:
 if __name__ == '__main__':
     # KE = KITTI_Extractor(parser.parse_args())
     # KE.extract()
-    KD = KittiData(1000, "./data/medium")
+    KD = KittiData(1000, "./data/coco", image_data_size=(608, 608))
     # KD.save_images = True
     # KD = KittiData()
     # KD.read_files()
     # KD.load_data()
     # KD.save_yad2k_data("KITTI_yad2k_tiny")
-    # KD.shuffle = False
+    KD.shuffle = False
     # KD.load_files()
     # KD.convert_to_h5(overwrite=True)
     # KD.batch_size = 2
@@ -572,7 +594,7 @@ if __name__ == '__main__':
     if train_gen:
 
         tic = time.time()
-        batch = next(train_gen)
+        batch = next(dev_gen)
         toc = time.time()-tic
 
         for out in batch[0]:
@@ -580,6 +602,8 @@ if __name__ == '__main__':
 
         ID = batch[0][-1][0]
         print(ID + ".png")
+
+        print(batch[0][1][0])
 
         image = batch[0][0]
         assert np.isclose(np.max(image), 1)
