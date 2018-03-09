@@ -346,11 +346,35 @@ def train_gen(model, data, weights_file="YOLO_fine_tuned.h5"):
 
         model_body, model = create_model(data.image_data_size, data.anchors, data.classes, load_pretrained=False, freeze_body=False)
         model.load_weights(weights_file)
+
         prune_network(model)
         model.compile(
             optimizer='adam', loss={
                 'yolo_loss': lambda y_true, y_pred: y_pred
             })  # This is a hack to use the custom loss function in the last layer.
+
+        num_epoch = 10
+        num_batches = data.m_train // data.batch_size
+        num_batches_dev = data.m_dev // data.batch_size
+        min_loss = np.inf
+        for epoch in range(num_epoch):
+            train_loss = np.zeros((num_batches,))
+            dev_loss = np.zeros((num_batches_dev,))
+            tic = time.time()
+            for i in range(num_batches):
+                x, y = next(train_gen)
+                train_loss[i] = model.train_on_batch(x, y)
+                prune_network(model)
+            for j in range(num_batches_dev):
+                x, y = next(dev_gen)
+                dev_loss[j] = model.test_on_batch(x, y)
+            train_loss_avg = float(np.mean(train_loss))
+            dev_loss_avg = float(np.mean(dev_loss))
+            toc = time.time() - tic
+            print("Epoch %d: Train Loss = %f.2, Dev Loss = %f.2 (%f.1 sec)"
+                  % (epoch, train_loss_avg, dev_loss_avg, toc))
+
+            
 
         model.fit_generator(generator=train_gen,
                             steps_per_epoch=len(data.partition['train']) // data.batch_size,
