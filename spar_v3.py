@@ -3,31 +3,30 @@
 import tensorflow as tf
 import numpy as np
 
-# masks is a list of tuple, each tuple is (var_name, mask)
+#masks is a list of tuple, each tuple is (var_name, mask)
 masks = []
 
-# name_tfv is a dictionary, where key is the variable name,
-# and value is tf.variable
+#name_tfv is a dictionary, where key is the variable name,
+#and value is tf.variable
 name_tfv = {}
 
-# name_ph, key variable name and value is tf.placeholder (with same dtype and shape)
+#name_ph, key variable name and value is tf.placeholder (with same dtype and shape)
 name_ph = {}
 
-
 def get_masks(sess, percent):
-    # get_mask generates masks sparsifying model weights
-    # Criteria for sparsification is specified by percientile,
-    # i.e. fraction of elements masked
-    # arguments:
-    # sess: tf sess where weights are stored
-    # percent: fraction of sparsified
+    #get_mask generates masks sparsifying model weights
+    #Criteria for sparsification is specified by percientile,
+    #i.e. fraction of elements maksed
+    #arguments:
+    #sess: tf sess where weights are stored
+    #percent: fraction of sparsified
     tf_variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
 
-    # name_vals is list, each is tuple (var_name, value)
+    #name_vals is list, each is tuple (var_name, value)
     name_vals = []
-    data = []
+    data=[]
 
-    # old_vals only contains values, it's a list
+    #old_vals only contains values, it's a list
     old_vals = sess.run(tf_variables)
     for val in old_vals:
         if len(val.shape) > 1:
@@ -36,7 +35,7 @@ def get_masks(sess, percent):
     CUTOFF = np.percentile(data, percent)
 
     for i in range(len(tf_variables)):
-        if len(old_vals[i].shape) > 1:
+        if(len(old_vals[i].shape) > 1):
             name_tfv[tf_variables[i].name] = tf_variables[i]
             cur_ph = tf.placeholder(tf_variables[i].dtype, shape=tf_variables[i].get_shape())
             name_ph[tf_variables[i].name] = cur_ph
@@ -45,13 +44,16 @@ def get_masks(sess, percent):
     global masks
     for pair in name_vals:
         weight_val = pair[1]
+        mask_cur = np.abs(weight_val) < CUTOFF
+        """
         mask_cur = np.ones(weight_val.shape)
-        if len(weight_val.shape) == 2:
+        if len(weight_val.shape)==2:
             for i in range(weight_val.shape[0]):
                 for j in range(weight_val.shape[1]):
-                    if abs(weight_val[i, j]) < CUTOFF:
-                        mask_cur[i, j] = 0
+                    if abs(weight_val[i, j]) <  CUTOFF:
+                        mask_cur[i ,j] = 0
         #pair[0] is the variable name
+        """
 
         masks.append((pair[0], mask_cur))
     return masks

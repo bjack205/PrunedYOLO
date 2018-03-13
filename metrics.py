@@ -17,7 +17,8 @@ def loadFiles():
     data = np.load(predictions_file)
     y = data['y'].item()
     yhat = data['yhat'].item()
-    CalcMetrics(y, yhat)
+    data = package_KITTI.KittiData(m=1000, output_path="./data/coco", image_data_size=(608, 608), h5path="/KITTI/coco/KITTI.h5")
+    CalcMetrics(y, yhat, data=data)
 
 
 def get_classes(classes_path):
@@ -34,7 +35,7 @@ def filter_classes(class_ints, class_list, class_filt):
     return np.array(filter)
 
 
-def CalcMetrics(y, yhat):
+def CalcMetrics(y, yhat, data=None):
     """
     Calculate Precision and Recall
     :param y: True label data. numpy.lib.npyio.NpzFile containing the following variables:
@@ -52,7 +53,9 @@ def CalcMetrics(y, yhat):
             'scores': (Cx1) list of floats with the confidence scores for the detections
     :return:
     """
-    data = package_KITTI.KittiData(m=1000, output_path="data/coco", image_data_size=(608, 608))
+    if data is None:
+        data = package_KITTI.KittiData()
+
     if data.to_coco:
         classes = get_classes("data/model_data/coco_classes.txt")
         classes_filt = COCO_CLASSES

@@ -67,7 +67,7 @@ def get_classes_dict(classes_path):
 
 
 class KittiData:
-    def __init__(self, m=-1, output_path='~/Research/PrunedYOLO/data', image_data_size=(416, 416)):
+    def __init__(self, m=-1, output_path='~/Research/PrunedYOLO/data', image_data_size=(416, 416), h5path=None):
         self.data_path = "/KITTI"
         self.camera = 2
         self.shuffle = True
@@ -96,37 +96,41 @@ class KittiData:
         self.image_path = os.path.join(training_path, 'image_' + str(self.camera))
         self.label_path = os.path.join(training_path, 'label_' + str(self.camera))
 
-        # Get total counts
-        m_total = count_files(self.image_path)
-        m_total_labels = count_files(self.label_path)
-        assert (m_total == m_total_labels)
-
-        # Get filename extensions
-        image_names = os.listdir(self.image_path)
-        _, self.im_ext = os.path.splitext(image_names[0])
-        label_names = os.listdir(self.label_path)
-        _, self.label_ext = os.path.splitext(label_names[0])
-
-        # Remove extensions (to ensure we read matching image and label files)
-        file_names = [os.path.splitext(name)[0] for name in image_names]
-        file_names.sort()
-
-        # Reduce data size
-        if m > 0:
-            file_names = file_names[:m]
-            m_total = m
-
-        # Split into train and dev
-        if self.dev_split < 1:
-            self.m_dev = int(np.round(m_total * self.dev_split))
+        if not h5path is None:
+            self.h5file_path = h5path
+            self.get_h5_info()
         else:
-            self.m_dev = self.dev_split
-        self.m_train = int(m_total - self.m_dev)
-        self.m_total = m_total
-        dev_names = file_names[:self.m_dev]
-        train_names = file_names[self.m_dev:self.m_dev + self.m_train]
-        self.partition = {'train': train_names, 'dev': dev_names}
-        self.IDs_list = file_names
+            # Get total counts
+            m_total = count_files(self.image_path)
+            m_total_labels = count_files(self.label_path)
+            assert (m_total == m_total_labels)
+
+            # Get filename extensions
+            image_names = os.listdir(self.image_path)
+            _, self.im_ext = os.path.splitext(image_names[0])
+            label_names = os.listdir(self.label_path)
+            _, self.label_ext = os.path.splitext(label_names[0])
+
+            # Remove extensions (to ensure we read matching image and label files)
+            file_names = [os.path.splitext(name)[0] for name in image_names]
+            file_names.sort()
+
+            # Reduce data size
+            if m > 0:
+                file_names = file_names[:m]
+                m_total = m
+
+            # Split into train and dev
+            if self.dev_split < 1:
+                self.m_dev = int(np.round(m_total * self.dev_split))
+            else:
+                self.m_dev = self.dev_split
+            self.m_train = int(m_total - self.m_dev)
+            self.m_total = m_total
+            dev_names = file_names[:self.m_dev]
+            train_names = file_names[self.m_dev:self.m_dev + self.m_train]
+            self.partition = {'train': train_names, 'dev': dev_names}
+            self.IDs_list = file_names
 
         # Both dictionaries containing fields 'images' and 'labels'
         self.raw_data = {}
@@ -138,6 +142,17 @@ class KittiData:
         # Detector masks
         self.detector_masks = []
         self.matching_true_boxes = []
+
+    def get_h5_info(self):
+        if self.check_h5():
+            file = h5.File(self.h5file_path, mode='r')
+            self.m_dev = file['dev']['images'].shape[0]
+            self.m_train = file['train']['images'].shape[0]
+            dev_names = file['dev']['ids']
+            train_names = file['train']['ids']
+            self.partition = {'train': train_names, 'dev': dev_names}
+            self.IDs_list = np.hstack((dev_names, train_names))
+            self.__print("From %s imported: %d Dev Images, %d Train Images" % (self.h5file_path, self.m_dev, self.m_train))
 
     def convert_to_h5(self, overwrite=None):
         h5path = self.h5file_path
