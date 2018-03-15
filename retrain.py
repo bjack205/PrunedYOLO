@@ -67,7 +67,7 @@ def _main(args):
     data = KittiData(m=1000, output_path="./data/coco", image_data_size=(608, 608), h5path="/KITTI/coco/KITTI.h5")
     # data = KittiData()
     num_classes = len(data.classes)
-    # model_body, model = create_model(data.image_data_size, data.anchors, data.classes, model_file="data/model_data/yolo.h5", freeze_body=True)
+    model_body, model = create_model(data.image_data_size, data.anchors, data.classes, model_file="data/model_data/yolo.h5", freeze_body=False)
 
     # tic = time.time()
     # pl = spar_keras.get_prunable_layers(model_body)
@@ -81,8 +81,9 @@ def _main(args):
     # prune_network(model_body)
     # print(time.time()-tic)
 
-    train_gen(None, data, weights_file="coco_fine_tuning_best.h5")
-    # test(args, model_body, data, weights_file="coco_retrain_full_epoch_8.h5")
+    train_with_pruning(data, weights_file="coco_retrain_full.h5")
+    # train_gen(None, data, weights_file="coco_retrain_full.h5")
+    # test(args, model_body, data, weights_file="coco_retrain_full.h5")
 
     # draw(model_body,
     #     class_names,
@@ -249,7 +250,7 @@ def train_gen(model, data, weights_file="YOLO_fine_tuned.h5"):
         model.save_weights(run_name + '.h5')
 
 def train_with_pruning(data, weights_file):
-    data.batch_size = 1
+    data.batch_size = 32
     num_epoch = 10
 
     # Get data generators from H5 files
@@ -293,7 +294,7 @@ def train_with_pruning(data, weights_file):
                 train_loss[i] = model.train_on_batch(x, y)
                 spar.apply_masks(sess)  # Re-apply masks to cancel gradient update on pruned weights
                 print("Epoch %d: batch %d / %d - Loss: %.2f (%.2f seconds)" % (
-                epoch + 1, i + 1, num_batches, train_loss[i], time.time() - tic), end='\r')
+                epoch + 1, i + 1, num_batches, train_loss[i], time.time() - tic))
             for j in range(num_batches_dev):
                 x, y = next(dev_gen)
                 dev_loss[j] = model.test_on_batch(x, y)
