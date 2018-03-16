@@ -9,7 +9,7 @@ masks = []
 #name_tfv is a dictionary, where key is the variable name,
 #and value is tf.variable
 name_tfv = {}
-feed_dict  = {}
+feed_dict = {}
 ops = []
 
 def get_masks(sess, percent):

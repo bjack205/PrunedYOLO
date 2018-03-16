@@ -77,7 +77,7 @@ def hfc(in_nodes, in_size, out_size, bt_size, rank = 2):
         updates = tf.matmul(tf.transpose(tf.gather(in_nodes_t, np.asarray(in_tree[lvl_cur][i]))), ww)
         ext = tf.SparseTensor(indices = get_ind(out_tree[lvl_cur][i]), values = [1.0]*dim_out, dense_shape = [dim_out, out_size])
         out_nodes += tf.transpose(tf.sparse_tensor_dense_matmul(b=updates, sp_a = ext, adjoint_a=True, adjoint_b=True))
-        #updates = tf.matmul(tf.transpose(tf.gather(in_nodes_t, in_tree[lvl_cur][i])), ww)
-        #tf.scatter_add(ref = out_nodes, indices = out_tree[lvl_cur][i], updates = tf.transpose(updates))
+        # updates = tf.matmul(tf.transpose(tf.gather(in_nodes_t, in_tree[lvl_cur][i])), ww)
+        # tf.scatter_add(ref = out_nodes, indices = out_tree[lvl_cur][i], updates = tf.transpose(updates))
 
     return out_nodes

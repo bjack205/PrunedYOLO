@@ -590,15 +590,15 @@ class KittiData:
 if __name__ == '__main__':
     # KE = KITTI_Extractor(parser.parse_args())
     # KE.extract()
-    KD = KittiData(1000, "./data/coco", image_data_size=(608, 608))
+    KD = KittiData(100, "./data/tiny", image_data_size=(608, 608))
     # KD.save_images = True
     # KD = KittiData()
-    # KD.read_files()
+    KD.read_files()
     # KD.load_data()
     # KD.save_yad2k_data("KITTI_yad2k_tiny")
     KD.shuffle = False
     # KD.load_files()
-    # KD.convert_to_h5(overwrite=True)
+    KD.convert_to_h5(overwrite=True)
     # KD.batch_size = 2
 
     print('\nTesting Generators')

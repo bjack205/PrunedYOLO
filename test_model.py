@@ -11,7 +11,7 @@ def test(args, model, data, weights_file=None):
     model_path = "data/model_data/yolo.h5"
     assert model_path.endswith('.h5'), 'Keras model must be a .h5 file.'
     output_path = data.output_path
-    score_threshold = 0.7
+    score_threshold = 0.1
     iou_threshold = 0.5
 
     class_names = data.classes
@@ -24,7 +24,6 @@ def test(args, model, data, weights_file=None):
     # yolo_model = load_model(model_path)
     model.load_weights(weights_file)
     yolo_model = model
-
 
     # Verify model, anchors, and classes are compatible
     num_classes = len(class_names)

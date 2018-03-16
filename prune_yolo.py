@@ -1,21 +1,23 @@
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 from keras import backend as K
-from keras.layers import Input, Lambda, Conv2D
-from keras.models import load_model, Model
-from keras.callbacks import TensorBoard, ModelCheckpoint, EarlyStopping
-import tensorflow as tf
+import time
+import spar
 
+from create_model import create_model
 import numpy as np
 from package_KITTI import KittiData
-from yad2k.models.keras_yolo import yolo_body, yolo_loss, yolo_eval, yolo_head, yolo_boxes_to_corners
+
+
 
 
 def _main():
-    data = KittiData(m=1000, output_path="./data/coco", image_data_size=(608, 608), h5path="/KITTI/coco/KITTI.h5")
-
-
+    data = KittiData(m=100, output_path="./data/tiny", image_data_size=(608, 608), h5path="data/tiny/KITTI.h5")
+    # model_body, model = create_model(data.image_data_size, data.anchors, data.classes, model_file="data/model_data/yolo_py27.h5", freeze_body=False)
+    train_with_pruning(data, weights_file="coco_retrain_full.h5")
 
 def train_with_pruning(data, weights_file):
-    data.batch_size = 32
+    data.batch_size = 1
     num_epoch = 10
 
     # Get data generators from H5 files
@@ -50,14 +52,14 @@ def train_with_pruning(data, weights_file):
             pruned_weights = []
 
             # Re-calculate pruning each epoch
-            sess = K.get_session()
-            percent_pruned.append(spar.get_masks(sess, level))
+            # sess = K.get_session()
+            # percent_pruned.append(spar.get_masks(sess, level))
 
             for i in range(num_batches):
                 tic = time.time()
                 x, y = next(train_gen)
                 train_loss[i] = model.train_on_batch(x, y)
-                spar.apply_masks(sess)  # Re-apply masks to cancel gradient update on pruned weights
+                # spar.apply_masks(sess)  # Re-apply masks to cancel gradient update on pruned weights
                 print("Epoch %d: batch %d / %d - Loss: %.2f (%.2f seconds)" % (
                 epoch + 1, i + 1, num_batches, train_loss[i], time.time() - tic))
             for j in range(num_batches_dev):
